@@ -176,11 +176,21 @@ class LocalVisualRanker:
         description: str,
         preview_urls: Sequence[str],
     ) -> list[float]:
+        images = [_download_preview_image(url) for url in preview_urls]
+        return self.score_images(description, images)
+
+    def score_images(
+        self,
+        description: str,
+        images: Sequence[Any],
+    ) -> list[float]:
+        """Compare in-memory images with text using the cached local model."""
+        if not images:
+            return []
         bundle = _get_model_bundle(self.model_name, self.pretrained)
         torch, model, preprocess, _, device = bundle
         text_embedding = self._text_embedding(description, bundle)
-        images = [preprocess(_download_preview_image(url)) for url in preview_urls]
-        image_batch = torch.stack(images).to(device)
+        image_batch = torch.stack([preprocess(image) for image in images]).to(device)
         with torch.no_grad():
             image_embeddings = model.encode_image(image_batch)
             image_embeddings = image_embeddings / image_embeddings.norm(
@@ -230,6 +240,11 @@ def _get_local_ranker(model_name: str, pretrained: str) -> LocalVisualRanker:
 def configured_ranker(app_config: Mapping[str, Any]) -> VisualRanker | None:
     if not app_config.get("visual_ranking_enabled", False):
         return None
+    return configured_local_scorer(app_config)
+
+
+def configured_local_scorer(app_config: Mapping[str, Any]) -> LocalVisualRanker | None:
+    """Create the shared local embedding service regardless of ranking mode."""
     provider = (
         str(app_config.get("visual_ranking_provider", DEFAULT_PROVIDER)).strip().lower()
     )

@@ -325,6 +325,8 @@ visual_ranking_enabled = true
 visual_ranking_provider = "local"
 visual_ranking_model = "ViT-B-32"
 visual_ranking_pretrained = "laion2b_s34b_b79k"
+visual_qa_enabled = true
+visual_qa_threshold = 0.20
 ```
 
 The model is loaded once per process and automatically uses CUDA when available,
@@ -333,6 +335,17 @@ scores are cosine similarities for relative ordering, not calibrated
 probabilities. If dependencies, thumbnails, or model loading are unavailable,
 MoneyPrinterTurbo keeps the deterministic query/provider ordering. No paid
 semantic service or TwelveLabs key is required.
+
+Strict visual QA is independently opt-in. It downloads at most the configured
+number of candidates per scene, samples three evenly spaced interior video
+frames by default, and averages the best two frame similarities. This top-two
+mean tolerates a short action not appearing in every frame without allowing one
+accidental frame to determine the result. The threshold is a relative embedding
+similarity, not a probability; `0.20` is a conservative starting point for the
+default model and may need tuning for a footage collection. Failed candidates
+advance through the scene's fallback queries. If none pass, the best scored clip
+is accepted with a warning unless `visual_qa_fail_on_mismatch = true`. Results
+are written to `visual_matching_report` in the task's `script.json` artifact.
 
 #### ② Launch the WebUI 🌐
 

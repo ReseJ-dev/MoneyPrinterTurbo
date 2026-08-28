@@ -26,6 +26,7 @@ from app.services import (
     task_artifacts,
     twelvelabs,
     video,
+    visual_qa,
     visual_scenes,
     volcengine_seedance,
     voice,
@@ -759,6 +760,9 @@ def get_video_materials(
                     video_aspect=params.video_aspect,
                     max_clip_duration=params.video_clip_duration,
                 )
+            except visual_qa.StrictVisualQAMismatch as exc:
+                _mark_task_failed(task_id, "materials", str(exc))
+                return None
             except Exception as exc:
                 logger.warning(
                     "scene-aware material retrieval failed; fall back to legacy "

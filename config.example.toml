@@ -142,6 +142,16 @@ visual_ranking_provider = "local"
 visual_ranking_model = "ViT-B-32"
 visual_ranking_pretrained = "laion2b_s34b_b79k"
 
+# Optional post-download QA. Three interior frames are compared with the scene
+# description and the best two scores are averaged. Similarity is not a
+# probability; 0.20 is a conservative starting point for the default model.
+visual_qa_enabled = false
+visual_qa_threshold = 0.20
+visual_qa_frame_count = 3
+visual_qa_max_attempts = 3
+visual_qa_fail_on_mismatch = false
+visual_qa_recent_asset_window = 1
+
 # Optional Sonilo video-matched original background music.
 # Create a key at https://platform.sonilo.com/dashboard. The WebUI can also save
 # this value, or you can set the SONILO_API_KEY environment variable instead.

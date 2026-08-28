@@ -18,6 +18,7 @@ from app.services import (
     material_cache,
     scene_materials,
     task_artifacts,
+    visual_qa,
     visual_ranking,
     volcengine_seedance,
 )
@@ -160,6 +161,27 @@ def _persist_material_sources(
         # 防止未来实现调整或目录解析异常意外影响素材下载返回值。
         logger.warning(
             "failed to persist material source records: "
+            f"task_id={task_id}, error={type(exc).__name__}, detail={exc}"
+        )
+
+
+def _persist_visual_matching_report(
+    task_id: str,
+    reports: list[visual_qa.VisualQAReport],
+) -> None:
+    try:
+        saved = task_artifacts.patch_script_data(
+            task_id,
+            visual_matching_report=[report.to_dict() for report in reports],
+        )
+        if saved:
+            logger.info(
+                "saved visual matching report: "
+                f"task_id={task_id}, scenes={len(reports)}"
+            )
+    except Exception as exc:
+        logger.warning(
+            "failed to persist visual matching report: "
             f"task_id={task_id}, error={type(exc).__name__}, detail={exc}"
         )
 
@@ -1226,9 +1248,16 @@ def select_video_candidates_by_scene(
     pools: List[scene_materials.SceneCandidatePool],
 ) -> list[scene_materials.SceneMaterialSelection]:
     """Optionally rank pools semantically, then select one asset per scene."""
-    ranker = visual_ranking.configured_ranker(config.app)
-    ranked_pools = visual_ranking.rank_candidate_pools(pools, ranker)
+    ranked_pools = rank_video_candidate_pools(pools)
     return scene_materials.select_candidates_by_scene(ranked_pools)
+
+
+def rank_video_candidate_pools(
+    pools: List[scene_materials.SceneCandidatePool],
+) -> list[scene_materials.SceneCandidatePool]:
+    """Apply the configured thumbnail ranker without selecting or downloading."""
+    ranker = visual_ranking.configured_ranker(config.app)
+    return visual_ranking.rank_candidate_pools(pools, ranker)
 
 
 def download_selected_scene_videos(
@@ -1294,10 +1323,71 @@ def download_videos_for_scenes(
         video_aspect=video_aspect,
         max_clip_duration=max_clip_duration,
     )
+    qa_config = visual_qa.VisualQAConfig.from_mapping(config.app)
+    if qa_config.enabled:
+        return download_scene_videos_with_visual_qa(task_id, pools, qa_config)
     selections = select_video_candidates_by_scene(pools)
     if not selections:
         return []
     return download_selected_scene_videos(task_id, selections)
+
+
+def download_scene_videos_with_visual_qa(
+    task_id: str,
+    pools: List[scene_materials.SceneCandidatePool],
+    qa_config: visual_qa.VisualQAConfig,
+) -> List[str]:
+    """Download and validate bounded ranked candidates for each visual scene."""
+    ranked_pools = rank_video_candidate_pools(pools)
+    scorer = visual_ranking.configured_local_scorer(config.app)
+    material_directory = _resolve_material_directory(task_id)
+    video_paths: List[str] = []
+    material_sources: list[dict[str, Any]] = []
+    reports: list[visual_qa.VisualQAReport] = []
+    recent_identities: list[str] = []
+    failed_scene_ids: list[int] = []
+
+    for pool in ranked_pools:
+        selection = visual_qa.qa_scene_candidates(
+            pool.scene,
+            pool.candidates,
+            scorer=scorer,
+            download=lambda item: save_video(
+                video_url=item.url,
+                save_dir=material_directory,
+            ),
+            threshold=qa_config.threshold,
+            frame_count=qa_config.frame_count,
+            max_attempts=qa_config.max_attempts,
+            fail_on_mismatch=qa_config.fail_on_mismatch,
+            recent_identities=recent_identities,
+        )
+        reports.append(selection.report)
+        if selection.material is None or not selection.local_path:
+            failed_scene_ids.append(pool.scene.id)
+            continue
+
+        video_paths.append(selection.local_path)
+        material_sources.append(
+            _material_source_record(selection.material, selection.local_path)
+        )
+        recent_identities.append(scene_materials.candidate_identity(selection.material))
+        if qa_config.recent_asset_window == 0:
+            recent_identities.clear()
+        elif len(recent_identities) > qa_config.recent_asset_window:
+            del recent_identities[: -qa_config.recent_asset_window]
+
+    _persist_material_sources(task_id, material_sources)
+    _persist_visual_matching_report(task_id, reports)
+    if qa_config.fail_on_mismatch and failed_scene_ids:
+        raise visual_qa.StrictVisualQAMismatch(
+            "strict visual QA rejected all attempted candidates for scenes: "
+            + ", ".join(str(scene_id) for scene_id in failed_scene_ids)
+        )
+    logger.success(
+        f"downloaded {len(video_paths)} scene-aware videos with strict visual QA"
+    )
+    return video_paths
 
 
 def download_videos(
