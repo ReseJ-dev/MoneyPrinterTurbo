@@ -307,6 +307,33 @@ Notes:
 - `uv.lock` pins the resolved environment, so `uv sync --frozen` is recommended by default.
 - `requirements.txt` is kept only for legacy `pip`-based installation.
 
+#### Optional local visual ranking
+
+Scene-aware stock retrieval can rank provider thumbnails against each scene's
+visual description with a local OpenCLIP model. This is disabled by default and
+is not part of the normal installation.
+
+```shell
+uv sync --extra visual-ranking
+```
+
+Then enable scene planning and ranking in `config.toml`:
+
+```toml
+visual_scene_planning = true
+visual_ranking_enabled = true
+visual_ranking_provider = "local"
+visual_ranking_model = "ViT-B-32"
+visual_ranking_pretrained = "laion2b_s34b_b79k"
+```
+
+The model is loaded once per process and automatically uses CUDA when available,
+otherwise CPU. The configured checkpoint is downloaded on first use. Candidate
+scores are cosine similarities for relative ordering, not calibrated
+probabilities. If dependencies, thumbnails, or model loading are unavailable,
+MoneyPrinterTurbo keeps the deterministic query/provider ordering. No paid
+semantic service or TwelveLabs key is required.
+
 #### ② Launch the WebUI 🌐
 
 Note that you need to execute the following commands in the `root directory` of the MoneyPrinterTurbo project

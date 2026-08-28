@@ -18,6 +18,7 @@ from app.services import (
     material_cache,
     scene_materials,
     task_artifacts,
+    visual_ranking,
     volcengine_seedance,
 )
 from app.utils import utils
@@ -105,12 +106,17 @@ def _material_source_record(item: MaterialInfo, local_path: str) -> dict[str, An
     scene_id = source.get("scene_id")
     visual_description = source.get("visual_description")
     search_query = source.get("search_query")
+    visual_match_score = source.get("visual_match_score")
     if isinstance(scene_id, int) and scene_id > 0:
         record["scene_id"] = scene_id
     if isinstance(visual_description, str) and visual_description.strip():
         record["visual_description"] = visual_description.strip()
     if isinstance(search_query, str) and search_query.strip():
         record["search_query"] = search_query.strip()
+    if isinstance(visual_match_score, (int, float)) and not isinstance(
+        visual_match_score, bool
+    ):
+        record["visual_match_score"] = float(visual_match_score)
 
     creator = _creator_info(source.get("creator"))
     if creator:
@@ -1219,8 +1225,10 @@ def search_video_candidates_by_scene(
 def select_video_candidates_by_scene(
     pools: List[scene_materials.SceneCandidatePool],
 ) -> list[scene_materials.SceneMaterialSelection]:
-    """Apply deterministic query/result ordering to scene candidate pools."""
-    return scene_materials.select_candidates_by_scene(pools)
+    """Optionally rank pools semantically, then select one asset per scene."""
+    ranker = visual_ranking.configured_ranker(config.app)
+    ranked_pools = visual_ranking.rank_candidate_pools(pools, ranker)
+    return scene_materials.select_candidates_by_scene(ranked_pools)
 
 
 def download_selected_scene_videos(

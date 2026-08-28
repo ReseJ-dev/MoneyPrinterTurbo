@@ -43,6 +43,12 @@ dependencies = [
 twelvelabs = [
     "twelvelabs>=1.2.8",
 ]
+# Optional local image-text similarity ranking for stock-footage thumbnails.
+# This extra installs PyTorch/OpenCLIP but does not load a model unless ranking
+# is explicitly enabled in config.toml.
+visual-ranking = [
+    "open-clip-torch==3.3.0",
+]
 
 [dependency-groups]
 dev = [

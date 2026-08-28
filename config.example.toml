@@ -134,6 +134,14 @@ match_materials_to_script = false
 # legacy flat search-term pipeline remains the default when this is false.
 visual_scene_planning = false
 
+# Optional local semantic ranking for scene candidate thumbnails. Install with
+# `uv sync --extra visual-ranking`, then enable explicitly. The first enabled
+# run downloads the configured OpenCLIP checkpoint; inference stays local.
+visual_ranking_enabled = false
+visual_ranking_provider = "local"
+visual_ranking_model = "ViT-B-32"
+visual_ranking_pretrained = "laion2b_s34b_b79k"
+
 # Optional Sonilo video-matched original background music.
 # Create a key at https://platform.sonilo.com/dashboard. The WebUI can also save
 # this value, or you can set the SONILO_API_KEY environment variable instead.

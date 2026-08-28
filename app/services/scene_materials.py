@@ -63,6 +63,8 @@ def _associate_candidate(
     *,
     scene: VisualScene,
     query: str,
+    query_priority: int,
+    provider_result_order: int,
 ) -> MaterialInfo:
     source = dict(item.source_info) if isinstance(item.source_info, dict) else {}
     source.update(
@@ -72,6 +74,8 @@ def _associate_candidate(
             "scene_id": scene.id,
             "visual_description": scene.visual_description,
             "search_query": query,
+            "query_priority": query_priority,
+            "provider_result_order": provider_result_order,
         }
     )
     return MaterialInfo(
@@ -92,7 +96,7 @@ def search_candidates_by_scene(
         candidates: list[MaterialInfo] = []
         seen: set[str] = set()
         attempted_queries: list[str] = []
-        for query in scene.search_queries:
+        for query_priority, query in enumerate(scene.search_queries):
             attempted_queries.append(query)
             try:
                 results = search(query)
@@ -104,12 +108,20 @@ def search_candidates_by_scene(
                 )
                 continue
 
-            for item in results:
+            for provider_result_order, item in enumerate(results):
                 identity = candidate_identity(item)
                 if identity in seen:
                     continue
                 seen.add(identity)
-                candidates.append(_associate_candidate(item, scene=scene, query=query))
+                candidates.append(
+                    _associate_candidate(
+                        item,
+                        scene=scene,
+                        query=query,
+                        query_priority=query_priority,
+                        provider_result_order=provider_result_order,
+                    )
+                )
 
         pools.append(
             SceneCandidatePool(

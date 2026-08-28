@@ -88,6 +88,40 @@ class TestSceneMaterialRetrieval(unittest.TestCase):
             ["query 1a", "query 2a"],
         )
 
+    def test_material_source_record_keeps_numeric_visual_score(self):
+        item = _material("ranked")
+        item.source_info["visual_match_score"] = 0.82
+
+        record = material._material_source_record(item, "/tmp/ranked.mp4")
+
+        self.assertEqual(record["visual_match_score"], 0.82)
+
+    def test_scene_selection_uses_configured_visual_ranker(self):
+        scene = _scene(1)
+        first = _material("first")
+        second = _material("second")
+        pool = scene_materials.SceneCandidatePool(
+            scene=scene,
+            candidates=(first, second),
+            attempted_queries=tuple(scene.search_queries),
+        )
+
+        class ReverseRanker:
+            def rank(self, ranked_scene, candidates):
+                self.scene = ranked_scene
+                return list(reversed(candidates))
+
+        ranker = ReverseRanker()
+        with patch.object(
+            material.visual_ranking,
+            "configured_ranker",
+            return_value=ranker,
+        ):
+            selections = material.select_video_candidates_by_scene([pool])
+
+        self.assertEqual(ranker.scene, scene)
+        self.assertEqual(selections[0].material.url, second.url)
+
 
 class TestSceneMaterialFallback(unittest.TestCase):
     def test_complete_scene_failure_falls_back_to_legacy_ordered_download(self):
