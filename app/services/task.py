@@ -14,6 +14,7 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
+from app.models.visual_scene import VisualScene
 from app.services import bgm as bgm_service
 from app.services import (
     elevenlabs_music,
@@ -25,6 +26,7 @@ from app.services import (
     task_artifacts,
     twelvelabs,
     video,
+    visual_scenes,
     volcengine_seedance,
     voice,
 )
@@ -348,12 +350,22 @@ def generate_terms(task_id, params, video_script):
     return video_terms
 
 
-def save_script_data(task_id, video_script, video_terms, params):
+def save_script_data(
+    task_id: str,
+    video_script: str,
+    video_terms: str | list[str],
+    params: VideoParams,
+    visual_scene_plan: list[VisualScene] | None = None,
+) -> None:
     script_data = {
         "script": video_script,
         "search_terms": video_terms,
         "params": params,
     }
+    if visual_scene_plan is not None:
+        script_data["visual_scenes"] = visual_scenes.serialize_visual_scenes(
+            visual_scene_plan
+        )
     task_artifacts.write_script_data(task_id, script_data)
 
 

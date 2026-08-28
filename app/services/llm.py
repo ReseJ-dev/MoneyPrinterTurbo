@@ -10,6 +10,8 @@ from openai.types.chat import ChatCompletion
 
 from app.config import config
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
+from app.models.visual_scene import VisualScene
+from app.services import visual_scenes
 
 _max_retries = 5
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
@@ -702,6 +704,50 @@ Please note that you must use English for generating video search terms; Chinese
 
     logger.success(f"completed: \n{search_terms}")
     return search_terms
+
+
+def generate_visual_scenes(
+    video_subject: str,
+    video_script: str,
+    target_scene_count: int | None = None,
+    clip_duration: float = visual_scenes.DEFAULT_CLIP_DURATION_SECONDS,
+    queries_per_scene: int = visual_scenes.DEFAULT_QUERIES_PER_SCENE,
+    app_config=None,
+) -> list[VisualScene]:
+    """Generate a validated chronological stock-footage plan for a narration."""
+    prompt = visual_scenes.build_visual_scene_prompt(
+        video_subject=video_subject,
+        video_script=video_script,
+        target_scene_count=target_scene_count,
+        clip_duration=clip_duration,
+        queries_per_scene=queries_per_scene,
+    )
+
+    for attempt in range(_max_retries):
+        try:
+            if app_config is None:
+                response = _generate_response(prompt)
+            else:
+                response = _generate_response(prompt, app_config=app_config)
+            if isinstance(response, str) and response.startswith("Error: "):
+                logger.error(f"failed to generate visual scenes: {response}")
+                return []
+            scenes = visual_scenes.parse_visual_scenes(
+                response,
+                queries_per_scene=queries_per_scene,
+            )
+            logger.success(f"generated {len(scenes)} visual scenes")
+            return scenes
+        except Exception as exc:
+            logger.warning(f"failed to generate visual scenes: {exc}")
+
+        if attempt < _max_retries - 1:
+            logger.warning(
+                "failed to generate visual scenes, trying again... "
+                f"{attempt + 1}"
+            )
+
+    return []
 
 
 # =============================================================================

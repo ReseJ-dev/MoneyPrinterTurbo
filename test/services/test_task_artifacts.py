@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.models.schema import VideoParams
+from app.models.visual_scene import VisualScene
 from app.services import task_artifacts
+from app.services import visual_scenes
 
 
 class TestTaskArtifacts(unittest.TestCase):
@@ -70,6 +72,41 @@ class TestTaskArtifacts(unittest.TestCase):
         self.assertEqual(payload["params"]["video_subject"], "test subject")
         self.assertEqual(payload["params"]["video_terms"], ["city", "night"])
         self.assertEqual(payload["params"]["video_source"], "pexels")
+
+    def test_write_script_data_can_include_typed_visual_scenes(self):
+        params = VideoParams(video_subject="black beach")
+        scenes = [
+            VisualScene(
+                id=1,
+                narration="This beach is completely black.",
+                visual_description="black sand beach beside ocean",
+                search_queries=[
+                    "black sand beach",
+                    "volcanic beach",
+                    "dark beach ocean",
+                ],
+            )
+        ]
+
+        task_artifacts.write_script_data(
+            "task-scenes",
+            {
+                "script": "This beach is completely black.",
+                "search_terms": ["black beach"],
+                "params": params,
+                "visual_scenes": visual_scenes.serialize_visual_scenes(scenes),
+            },
+        )
+        payload = json.loads((self.task_dir / "script.json").read_text())
+
+        self.assertEqual(payload["script"], "This beach is completely black.")
+        self.assertEqual(payload["search_terms"], ["black beach"])
+        self.assertEqual(payload["params"]["video_subject"], "black beach")
+        self.assertEqual(payload["visual_scenes"][0]["id"], 1)
+        self.assertEqual(
+            payload["visual_scenes"][0]["search_queries"],
+            ["black sand beach", "volcanic beach", "dark beach ocean"],
+        )
 
     def test_patch_missing_script_is_non_blocking(self):
         """独立调用素材下载时没有任务清单，应静默跳过而不是创建残缺 JSON。"""
