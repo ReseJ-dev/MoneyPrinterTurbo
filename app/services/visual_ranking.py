@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import importlib.util
 import threading
 from dataclasses import replace
 from functools import lru_cache
@@ -21,8 +22,31 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 MAX_TEXT_EMBEDDINGS = 128
 
 
+def local_visual_ai_dependencies_available() -> bool:
+    """Check optional packages without importing or initializing the model."""
+    try:
+        return all(
+            importlib.util.find_spec(package) is not None
+            for package in ("open_clip", "torch")
+        )
+    except (ImportError, ValueError):
+        return False
+
+
 class VisualRankingUnavailable(RuntimeError):
     pass
+
+
+class UnavailableVisualScorer:
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def score_images(
+        self,
+        description: str,
+        images: Sequence[Any],
+    ) -> list[float]:
+        raise VisualRankingUnavailable(self.reason)
 
 
 class VisualRanker(Protocol):

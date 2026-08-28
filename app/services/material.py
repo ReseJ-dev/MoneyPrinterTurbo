@@ -3,6 +3,7 @@ import os
 import random
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, List
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
@@ -1254,9 +1255,15 @@ def select_video_candidates_by_scene(
 
 def rank_video_candidate_pools(
     pools: List[scene_materials.SceneCandidatePool],
+    *,
+    force_visual_ranking: bool = False,
 ) -> list[scene_materials.SceneCandidatePool]:
     """Apply the configured thumbnail ranker without selecting or downloading."""
-    ranker = visual_ranking.configured_ranker(config.app)
+    ranker = (
+        visual_ranking.configured_local_scorer(config.app)
+        if force_visual_ranking
+        else visual_ranking.configured_ranker(config.app)
+    )
     return visual_ranking.rank_candidate_pools(pools, ranker)
 
 
@@ -1286,9 +1293,7 @@ def download_selected_scene_videos(
                 continue
             video_paths.append(saved_video_path)
             try:
-                material_sources.append(
-                    _material_source_record(item, saved_video_path)
-                )
+                material_sources.append(_material_source_record(item, saved_video_path))
             except Exception as source_error:
                 logger.warning(
                     "failed to prepare scene material source record: "
@@ -1315,6 +1320,7 @@ def download_videos_for_scenes(
     source: str = "pexels",
     video_aspect: VideoAspect = VideoAspect.portrait,
     max_clip_duration: int = 5,
+    strict_visual_qa: bool = False,
 ) -> List[str]:
     """Search, select, then download one stock candidate for each covered scene."""
     pools = search_video_candidates_by_scene(
@@ -1324,8 +1330,15 @@ def download_videos_for_scenes(
         max_clip_duration=max_clip_duration,
     )
     qa_config = visual_qa.VisualQAConfig.from_mapping(config.app)
+    if strict_visual_qa:
+        qa_config = replace(qa_config, enabled=True)
     if qa_config.enabled:
-        return download_scene_videos_with_visual_qa(task_id, pools, qa_config)
+        return download_scene_videos_with_visual_qa(
+            task_id,
+            pools,
+            qa_config,
+            force_visual_ranking=strict_visual_qa,
+        )
     selections = select_video_candidates_by_scene(pools)
     if not selections:
         return []
@@ -1336,10 +1349,19 @@ def download_scene_videos_with_visual_qa(
     task_id: str,
     pools: List[scene_materials.SceneCandidatePool],
     qa_config: visual_qa.VisualQAConfig,
+    *,
+    force_visual_ranking: bool = False,
 ) -> List[str]:
     """Download and validate bounded ranked candidates for each visual scene."""
-    ranked_pools = rank_video_candidate_pools(pools)
+    ranked_pools = rank_video_candidate_pools(
+        pools,
+        force_visual_ranking=force_visual_ranking,
+    )
     scorer = visual_ranking.configured_local_scorer(config.app)
+    if scorer is None:
+        scorer = visual_ranking.UnavailableVisualScorer(
+            "local visual AI provider is unavailable"
+        )
     material_directory = _resolve_material_directory(task_id)
     video_paths: List[str] = []
     material_sources: list[dict[str, Any]] = []

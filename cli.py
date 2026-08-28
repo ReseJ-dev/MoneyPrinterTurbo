@@ -316,6 +316,16 @@ Batch manifests:
         ),
     )
     video_group.add_argument(
+        "--material-matching-mode",
+        choices=["fast", "better", "strict"],
+        default=None,
+        help=(
+            "material relevance quality: fast uses legacy flat terms; better plans "
+            "visual scenes; strict also validates downloaded video frames "
+            "(default: fast)"
+        ),
+    )
+    video_group.add_argument(
         "--match-materials-to-script",
         default=None,
         action=argparse.BooleanOptionalAction,
@@ -731,6 +741,7 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "video_concat_mode",
         "video_transition_mode",
         "video_clip_duration",
+        "material_matching_mode",
         "match_materials_to_script",
         "visual_scene_planning",
         "n_threads",

@@ -122,8 +122,64 @@ class TestSceneMaterialRetrieval(unittest.TestCase):
         self.assertEqual(ranker.scene, scene)
         self.assertEqual(selections[0].material.url, second.url)
 
+    def test_strict_pool_ranking_forces_shared_local_scorer(self):
+        pool = scene_materials.SceneCandidatePool(
+            scene=_scene(1),
+            candidates=(_material("first"),),
+            attempted_queries=tuple(_scene(1).search_queries),
+        )
+        scorer = object()
+
+        with (
+            patch.object(
+                material.visual_ranking,
+                "configured_local_scorer",
+                return_value=scorer,
+            ) as configured_local,
+            patch.object(
+                material.visual_ranking,
+                "configured_ranker",
+            ) as configured_optional,
+            patch.object(
+                material.visual_ranking,
+                "rank_candidate_pools",
+                return_value=[pool],
+            ) as rank,
+        ):
+            result = material.rank_video_candidate_pools(
+                [pool],
+                force_visual_ranking=True,
+            )
+
+        self.assertEqual(result, [pool])
+        configured_local.assert_called_once_with(material.config.app)
+        configured_optional.assert_not_called()
+        rank.assert_called_once_with([pool], scorer)
+
 
 class TestSceneMaterialFallback(unittest.TestCase):
+    def test_strict_mode_enables_downloaded_video_qa(self):
+        params = VideoParams(
+            video_subject="owl",
+            material_matching_mode="strict",
+        )
+
+        with patch.object(
+            material,
+            "download_videos_for_scenes",
+            return_value=["strict.mp4"],
+        ) as scene_download:
+            result = task_service.get_video_materials(
+                "strict",
+                params,
+                ["owl"],
+                5,
+                visual_scene_plan=[_scene(1)],
+            )
+
+        self.assertEqual(result, ["strict.mp4"])
+        self.assertTrue(scene_download.call_args.kwargs["strict_visual_qa"])
+
     def test_complete_scene_failure_falls_back_to_legacy_ordered_download(self):
         params = VideoParams(
             video_subject="black beach",

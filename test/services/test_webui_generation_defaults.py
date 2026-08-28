@@ -4,7 +4,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from app.config import config
-from app.services import voice
+from app.services import visual_ranking, voice
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -426,6 +426,53 @@ def test_loomloom_tuning_survives_restart_without_persisting_payment_state():
             second_session.number_input, "loomloom_video_scene_count"
         ).value == 3
         assert second_session.session_state["loomloom_video_confirm_charge"] is False
+
+
+def test_material_matching_modes_show_recommendation_and_degradation_status():
+    test_app_config = dict(config.app, video_source="pexels")
+    test_app_config.pop("material_matching_mode", None)
+    test_app_config["visual_scene_planning"] = False
+    test_ui_config = dict(
+        config.ui,
+        language="en",
+        voice_mode="tts",
+        tts_server="azure-tts-v1",
+        voice_name="en-US-JennyNeural-Female",
+    )
+
+    with (
+        patch.object(config, "app", test_app_config),
+        patch.object(config, "ui", test_ui_config),
+        patch.object(config, "try_save_config", return_value=True),
+        patch.object(
+            voice,
+            "get_all_azure_voices",
+            return_value=["en-US-JennyNeural-Female"],
+        ),
+        patch.object(
+            visual_ranking,
+            "local_visual_ai_dependencies_available",
+            return_value=False,
+        ),
+    ):
+        app = _new_app()
+        matching = _widget_by_key(
+            app.selectbox,
+            "material_matching_mode_select",
+        )
+        assert matching.value == "fast"
+        assert "Better (Recommended)" in matching.options
+
+        matching.set_value("better").run()
+        assert any(
+            "Plans visual scenes" in caption.value for caption in app.caption
+        )
+
+        _widget_by_key(
+            app.selectbox,
+            "material_matching_mode_select",
+        ).set_value("strict").run()
+        assert any("strongest available" in warning.value for warning in app.warning)
 
 
 def test_script_order_constraint_does_not_replace_saved_concat_preference():
