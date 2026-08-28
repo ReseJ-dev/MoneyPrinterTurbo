@@ -21,6 +21,11 @@ class TestVideoAspect(unittest.TestCase):
 
 
 class TestVideoParams(unittest.TestCase):
+    def test_visual_scene_planning_is_opt_in(self):
+        params = VideoParams(video_subject="Coffee")
+
+        self.assertFalse(params.visual_scene_planning)
+
     def test_rejects_non_positive_generation_counts(self):
         for field_name in ("video_clip_duration", "video_count"):
             for value in (0, -1, None):

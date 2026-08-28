@@ -650,6 +650,99 @@ class TestTaskService(unittest.TestCase):
             match_script_order=True,
         )
 
+    def test_generate_visual_scene_plan_is_opt_in_and_uses_clip_duration(self):
+        params = VideoParams(
+            video_subject="black beach",
+            visual_scene_planning=True,
+            video_clip_duration=4,
+        )
+        scenes = [
+            tm.VisualScene(
+                id=1,
+                narration="The beach is black.",
+                visual_description="black sand beach",
+                search_queries=["black beach", "volcanic beach", "dark ocean"],
+            )
+        ]
+
+        with patch.object(
+            tm.llm, "generate_visual_scenes", return_value=scenes
+        ) as generate:
+            result = tm.generate_visual_scene_plan(params, "The beach is black.")
+
+        self.assertEqual(result, scenes)
+        generate.assert_called_once_with(
+            video_subject="black beach",
+            video_script="The beach is black.",
+            clip_duration=4,
+        )
+
+    def test_start_uses_scene_queries_and_persists_plan_when_enabled(self):
+        params = VideoParams(
+            video_subject="black beach",
+            video_script="The beach is black.",
+            visual_scene_planning=True,
+        )
+        scenes = [
+            tm.VisualScene(
+                id=1,
+                narration="The beach is black.",
+                visual_description="black sand beach",
+                search_queries=["black beach", "volcanic beach", "dark ocean"],
+            )
+        ]
+        state = MemoryState()
+
+        with (
+            patch.object(tm, "generate_script", return_value=params.video_script),
+            patch.object(tm, "generate_visual_scene_plan", return_value=scenes),
+            patch.object(tm, "generate_terms") as generate_terms,
+            patch.object(tm, "save_script_data") as save_script_data,
+            patch.object(tm.sm, "state", state),
+        ):
+            result = tm.start("scene-terms", params, stop_at="terms")
+
+        self.assertEqual(
+            result,
+            {
+                "script": "The beach is black.",
+                "terms": ["black beach", "volcanic beach", "dark ocean"],
+            },
+        )
+        generate_terms.assert_not_called()
+        save_script_data.assert_called_once_with(
+            "scene-terms",
+            "The beach is black.",
+            ["black beach", "volcanic beach", "dark ocean"],
+            params,
+            visual_scene_plan=scenes,
+        )
+
+    def test_start_falls_back_to_legacy_terms_when_scene_planning_is_empty(self):
+        params = VideoParams(
+            video_subject="black beach",
+            video_script="The beach is black.",
+            visual_scene_planning=True,
+        )
+        state = MemoryState()
+
+        with (
+            patch.object(tm, "generate_script", return_value=params.video_script),
+            patch.object(tm, "generate_visual_scene_plan", return_value=[]),
+            patch.object(
+                tm, "generate_terms", return_value=["black beach"]
+            ) as generate_terms,
+            patch.object(tm, "save_script_data") as save_script_data,
+            patch.object(tm.sm, "state", state),
+        ):
+            result = tm.start("scene-plan-fallback", params, stop_at="terms")
+
+        self.assertEqual(result["terms"], ["black beach"])
+        generate_terms.assert_called_once_with(
+            "scene-plan-fallback", params, "The beach is black."
+        )
+        self.assertIsNone(save_script_data.call_args.kwargs["visual_scene_plan"])
+
     def test_start_stops_before_materials_when_term_provider_fails(self):
         """
         关键词 Provider 失败后，任务必须立即结束，不能继续生成音频或下载素材。

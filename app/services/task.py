@@ -350,6 +350,36 @@ def generate_terms(task_id, params, video_script):
     return video_terms
 
 
+def generate_visual_scene_plan(
+    params: VideoParams,
+    video_script: str,
+) -> list[VisualScene]:
+    if not params.visual_scene_planning:
+        return []
+    if not material.supports_scene_aware_search(params.video_source):
+        logger.warning(
+            "visual scene planning is only available for stock providers; "
+            f"use legacy materials for source={params.video_source}"
+        )
+        return []
+
+    logger.info("\n\n## generating visual scene plan")
+    scenes = llm.generate_visual_scenes(
+        video_subject=params.video_subject,
+        video_script=video_script,
+        clip_duration=params.video_clip_duration,
+    )
+    if not scenes:
+        logger.warning(
+            "visual scene planning returned no scenes; fall back to legacy terms"
+        )
+    return scenes
+
+
+def _scene_search_terms(scenes: list[VisualScene]) -> list[str]:
+    return [query for scene in scenes for query in scene.search_queries]
+
+
 def save_script_data(
     task_id: str,
     video_script: str,
@@ -640,6 +670,7 @@ def get_video_materials(
     video_terms,
     audio_duration,
     loomloom_video_request: loomloom.LoomLoomConfirmedVideoRequest | None = None,
+    visual_scene_plan: list[VisualScene] | None = None,
 ):
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
@@ -717,6 +748,30 @@ def get_video_materials(
             return None
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
+        if visual_scene_plan and material.supports_scene_aware_search(
+            params.video_source
+        ):
+            try:
+                scene_videos = material.download_videos_for_scenes(
+                    task_id=task_id,
+                    visual_scenes=visual_scene_plan,
+                    source=params.video_source,
+                    video_aspect=params.video_aspect,
+                    max_clip_duration=params.video_clip_duration,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "scene-aware material retrieval failed; fall back to legacy "
+                    f"ordered terms: error={type(exc).__name__}, detail={exc}"
+                )
+            else:
+                if scene_videos:
+                    return scene_videos
+                logger.warning(
+                    "scene-aware material retrieval found no downloadable videos; "
+                    "fall back to legacy ordered terms"
+                )
+
         # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
         # 轮询，避免某个早期关键词下载太多素材，把后续脚本主题挤出最终时间线。
         try:
@@ -727,12 +782,18 @@ def get_video_materials(
                 video_aspect=params.video_aspect,
                 video_concat_mode=(
                     VideoConcatMode.sequential
-                    if params.match_materials_to_script
+                    if (
+                        params.match_materials_to_script
+                        or params.visual_scene_planning
+                    )
                     else params.video_concat_mode
                 ),
                 audio_duration=audio_duration * params.video_count,
                 max_clip_duration=params.video_clip_duration,
-                match_script_order=params.match_materials_to_script,
+                match_script_order=(
+                    params.match_materials_to_script
+                    or params.visual_scene_planning
+                ),
             )
         except volcengine_seedance.VolcEngineSeedanceError as exc:
             # 未确认状态和已生成但下载失败都对应一个可在方舟控制台恢复的远端
@@ -817,7 +878,7 @@ def generate_final_videos(
     )
     # 多视频生成默认会打散素材以增加差异；但“按文案顺序匹配素材”追求的是
     # 时间线稳定性和可解释性，所以开启后所有输出都使用顺序拼接。
-    if params.match_materials_to_script:
+    if params.match_materials_to_script or params.visual_scene_planning:
         video_concat_mode = VideoConcatMode.sequential
     elif params.video_count == 1:
         video_concat_mode = params.video_concat_mode
@@ -1342,10 +1403,15 @@ def _run_pipeline(
         )
         return {"script": video_script}
 
-    # 2. Generate terms
+    # 2. Generate visual scenes or legacy terms
     video_terms = ""
+    visual_scene_plan: list[VisualScene] = []
     if params.video_source != "local":
-        video_terms = generate_terms(task_id, params, video_script)
+        visual_scene_plan = generate_visual_scene_plan(params, video_script)
+        if visual_scene_plan:
+            video_terms = _scene_search_terms(visual_scene_plan)
+        else:
+            video_terms = generate_terms(task_id, params, video_script)
         if not video_terms:
             return _mark_task_failed(
                 task_id,
@@ -1353,7 +1419,13 @@ def _run_pipeline(
                 "failed to generate video search terms",
             )
 
-    save_script_data(task_id, video_script, video_terms, params)
+    save_script_data(
+        task_id,
+        video_script,
+        video_terms,
+        params,
+        visual_scene_plan=visual_scene_plan or None,
+    )
 
     if stop_at == "terms":
         sm.state.update_task(
@@ -1412,6 +1484,7 @@ def _run_pipeline(
         video_terms,
         audio_duration,
         loomloom_video_request=loomloom_video_request,
+        visual_scene_plan=visual_scene_plan,
     )
     if not downloaded_videos:
         return _mark_task_failed(

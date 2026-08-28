@@ -40,6 +40,7 @@ class TestMaterialTlsVerification(unittest.TestCase):
                     {
                         "id": 321,
                         "url": "https://www.pexels.com/video/example-321/?token=drop",
+                        "image": "https://images.pexels.com/videos/321/preview.jpg?token=drop",
                         "duration": 8,
                         "user": {
                             "id": 654,
@@ -74,6 +75,10 @@ class TestMaterialTlsVerification(unittest.TestCase):
             "https://www.pexels.com/@creator/",
         )
         self.assertEqual(results[0].source_info["rendition"]["id"], "987")
+        self.assertEqual(
+            results[0].source_info["preview_url"],
+            "https://images.pexels.com/videos/321/preview.jpg",
+        )
 
     def test_search_pixabay_allows_explicit_tls_disable_for_proxy(self):
         """

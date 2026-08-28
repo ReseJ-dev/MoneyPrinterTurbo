@@ -325,6 +325,15 @@ Batch manifests:
         ),
     )
     video_group.add_argument(
+        "--visual-scene-planning",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "plan chronological visual scenes and search three stock-footage "
+            "queries per scene (default: disabled)"
+        ),
+    )
+    video_group.add_argument(
         "--n-threads",
         type=_positive_int,
         default=None,
@@ -723,6 +732,7 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "video_transition_mode",
         "video_clip_duration",
         "match_materials_to_script",
+        "visual_scene_planning",
         "n_threads",
         "voice_volume",
         "voice_rate",

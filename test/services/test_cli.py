@@ -229,6 +229,7 @@ class TestCli(unittest.TestCase):
                 "--video-clip-duration",
                 "4",
                 "--match-materials-to-script",
+                "--visual-scene-planning",
                 "--voice-volume",
                 "1.2",
                 "--voice-rate",
@@ -254,6 +255,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(params.video_transition_mode, "FadeIn")
         self.assertEqual(params.video_clip_duration, 4)
         self.assertTrue(params.match_materials_to_script)
+        self.assertTrue(params.visual_scene_planning)
         self.assertEqual(params.voice_volume, 1.2)
         self.assertEqual(params.voice_rate, 1.1)
         self.assertEqual(params.bgm_type, "custom")

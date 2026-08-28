@@ -13,7 +13,13 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
-from app.services import material_cache, task_artifacts, volcengine_seedance
+from app.models.visual_scene import VisualScene
+from app.services import (
+    material_cache,
+    scene_materials,
+    task_artifacts,
+    volcengine_seedance,
+)
 from app.utils import utils
 
 # Thread-safe counter for API key rotation
@@ -86,12 +92,25 @@ def _material_source_record(item: MaterialInfo, local_path: str) -> dict[str, An
     search_term = source.get("search_term")
     asset_id = source.get("asset_id")
     source_page = _safe_public_url(source.get("source_page"))
+    preview_url = _safe_public_url(source.get("preview_url"))
     if isinstance(search_term, str) and search_term.strip():
         record["search_term"] = search_term.strip()
     if asset_id not in (None, ""):
         record["asset_id"] = str(asset_id)
     if source_page:
         record["source_page"] = source_page
+    if preview_url:
+        record["preview_url"] = preview_url
+
+    scene_id = source.get("scene_id")
+    visual_description = source.get("visual_description")
+    search_query = source.get("search_query")
+    if isinstance(scene_id, int) and scene_id > 0:
+        record["scene_id"] = scene_id
+    if isinstance(visual_description, str) and visual_description.strip():
+        record["visual_description"] = visual_description.strip()
+    if isinstance(search_query, str) and search_query.strip():
+        record["search_query"] = search_query.strip()
 
     creator = _creator_info(source.get("creator"))
     if creator:
@@ -353,6 +372,7 @@ def search_videos_pexels(
                         ),
                         "source_page": _safe_public_url(v.get("url")),
                         "creator": _creator_info(v.get("user")),
+                        "preview_url": _safe_public_url(v.get("image")),
                         "rendition": {
                             "id": (
                                 str(video.get("id"))
@@ -1142,6 +1162,136 @@ def _search_videos_with_cache(
         return items
 
 
+def _stock_search_provider(source: str):
+    providers = {
+        "pexels": search_videos_pexels,
+        "pixabay": search_videos_pixabay,
+        "coverr": search_videos_coverr,
+    }
+    normalized = str(source or "").strip().lower()
+    search = providers.get(normalized)
+    if search is None:
+        return None
+    return normalized, search
+
+
+def supports_scene_aware_search(source: str) -> bool:
+    return _stock_search_provider(source) is not None
+
+
+def _resolve_material_directory(task_id: str) -> str:
+    material_directory = config.app.get("material_directory", "").strip()
+    if material_directory == "task":
+        return utils.task_dir(task_id)
+    if material_directory and not os.path.isdir(material_directory):
+        return ""
+    return material_directory
+
+
+def search_video_candidates_by_scene(
+    visual_scenes: List[VisualScene],
+    *,
+    source: str = "pexels",
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    max_clip_duration: int = 5,
+) -> list[scene_materials.SceneCandidatePool]:
+    """Build provider-backed candidate pools without downloading any videos."""
+    provider_search = _stock_search_provider(source)
+    if provider_search is None:
+        logger.warning(
+            f"scene-aware stock search is unavailable for provider: {source}"
+        )
+        return []
+    provider, remote_search = provider_search
+
+    def search(query: str) -> List[MaterialInfo]:
+        return _search_videos_with_cache(
+            provider=provider,
+            search_videos=remote_search,
+            search_term=query,
+            minimum_duration=max_clip_duration,
+            video_aspect=video_aspect,
+        )
+
+    return scene_materials.search_candidates_by_scene(visual_scenes, search)
+
+
+def select_video_candidates_by_scene(
+    pools: List[scene_materials.SceneCandidatePool],
+) -> list[scene_materials.SceneMaterialSelection]:
+    """Apply deterministic query/result ordering to scene candidate pools."""
+    return scene_materials.select_candidates_by_scene(pools)
+
+
+def download_selected_scene_videos(
+    task_id: str,
+    selections: List[scene_materials.SceneMaterialSelection],
+) -> List[str]:
+    """Download only the already-selected scene assets in chronological order."""
+    material_directory = _resolve_material_directory(task_id)
+    video_paths: List[str] = []
+    material_sources: list[dict[str, Any]] = []
+    for selection in selections:
+        item = selection.material
+        try:
+            source = item.source_info if isinstance(item.source_info, dict) else {}
+            logger.info(
+                "downloading selected scene material: "
+                f"scene_id={selection.scene.id}, provider={item.provider}, "
+                f"asset_id={source.get('asset_id') or 'unknown'}, "
+                f"query={source.get('search_query')!r}"
+            )
+            saved_video_path = save_video(
+                video_url=item.url,
+                save_dir=material_directory,
+            )
+            if not saved_video_path:
+                continue
+            video_paths.append(saved_video_path)
+            try:
+                material_sources.append(
+                    _material_source_record(item, saved_video_path)
+                )
+            except Exception as source_error:
+                logger.warning(
+                    "failed to prepare scene material source record: "
+                    f"scene_id={selection.scene.id}, provider={item.provider}, "
+                    f"error={type(source_error).__name__}, detail={source_error}"
+                )
+        except Exception as exc:
+            logger.error(
+                "failed to download selected scene material: "
+                f"scene_id={selection.scene.id}, provider={item.provider}, "
+                f"error={type(exc).__name__}, "
+                f"detail={_redact_request_error(exc, item.url)}"
+            )
+
+    _persist_material_sources(task_id, material_sources)
+    logger.success(f"downloaded {len(video_paths)} scene-aware videos")
+    return video_paths
+
+
+def download_videos_for_scenes(
+    task_id: str,
+    visual_scenes: List[VisualScene],
+    *,
+    source: str = "pexels",
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    max_clip_duration: int = 5,
+) -> List[str]:
+    """Search, select, then download one stock candidate for each covered scene."""
+    pools = search_video_candidates_by_scene(
+        visual_scenes,
+        source=source,
+        video_aspect=video_aspect,
+        max_clip_duration=max_clip_duration,
+    )
+    selections = select_video_candidates_by_scene(pools)
+    if not selections:
+        return []
+    return download_selected_scene_videos(task_id, selections)
+
+
 def download_videos(
     task_id: str,
     search_terms: List[str],
@@ -1174,11 +1324,7 @@ def download_videos(
             video_aspect=video_aspect,
         )
 
-    material_directory = config.app.get("material_directory", "").strip()
-    if material_directory == "task":
-        material_directory = utils.task_dir(task_id)
-    elif material_directory and not os.path.isdir(material_directory):
-        material_directory = ""
+    material_directory = _resolve_material_directory(task_id)
 
     if source == "wavespeed":
         # AI 生成按条计费，不能沿用库存源"先为全部关键词取回候选、再挑选"
