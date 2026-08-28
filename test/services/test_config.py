@@ -46,6 +46,7 @@ class TestConfigPersistence:
             "local",
         }
         assert "match_materials_to_script" in app_config
+        assert app_config["material_matching_mode"] == "fast"
         assert app_config["script_generation_backend"] == "local"
         assert app_config["loomloom_api_token"] == ""
         assert app_config["loomloom_video_run_timeout_seconds"] == 1800

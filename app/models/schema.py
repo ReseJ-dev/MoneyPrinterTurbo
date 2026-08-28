@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import config
 
@@ -18,6 +18,12 @@ warnings.filterwarnings(
 class VideoConcatMode(str, Enum):
     random = "random"
     sequential = "sequential"
+
+
+class MaterialMatchingMode(str, Enum):
+    fast = "fast"
+    better = "better"
+    strict = "strict"
 
 
 class VideoTransitionMode(str, Enum):
@@ -86,6 +92,13 @@ class VideoParams(BaseModel):
     video_transition_mode: Optional[VideoTransitionMode] = None
     video_clip_duration: int = Field(default=5, ge=1)
     video_clip_speed: Optional[float] = 1.0
+    material_matching_mode: MaterialMatchingMode = Field(
+        default=config.app.get(
+            "material_matching_mode",
+            MaterialMatchingMode.fast.value,
+        ),
+        validate_default=True,
+    )
     match_materials_to_script: bool = False
     visual_scene_planning: bool = config.app.get("visual_scene_planning", False)
     video_count: int = Field(default=1, ge=1)
@@ -128,6 +141,57 @@ class VideoParams(BaseModel):
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_material_matching_settings(cls, values):
+        if not isinstance(values, dict) or "material_matching_mode" in values:
+            return values
+        mapped = dict(values)
+        if mapped.get("visual_scene_planning"):
+            mapped["material_matching_mode"] = (
+                MaterialMatchingMode.strict
+                if config.app.get("visual_qa_enabled", False)
+                else MaterialMatchingMode.better
+            )
+        elif mapped.get("match_materials_to_script"):
+            mapped["material_matching_mode"] = MaterialMatchingMode.fast
+        elif "material_matching_mode" in config.app:
+            mapped["material_matching_mode"] = config.app["material_matching_mode"]
+        elif config.app.get("visual_scene_planning", False):
+            mapped["material_matching_mode"] = (
+                MaterialMatchingMode.strict
+                if config.app.get("visual_qa_enabled", False)
+                else MaterialMatchingMode.better
+            )
+        return mapped
+
+    @property
+    def resolved_material_matching_mode(self) -> MaterialMatchingMode:
+        """Resolve the new mode first, then preserve legacy opt-in settings."""
+        return self.material_matching_mode
+
+    @property
+    def uses_visual_scene_matching(self) -> bool:
+        return self.resolved_material_matching_mode in {
+            MaterialMatchingMode.better,
+            MaterialMatchingMode.strict,
+        }
+
+    @property
+    def uses_strict_visual_qa(self) -> bool:
+        return self.resolved_material_matching_mode == MaterialMatchingMode.strict
+
+    @property
+    def uses_legacy_script_matching(self) -> bool:
+        return (
+            self.resolved_material_matching_mode == MaterialMatchingMode.fast
+            and self.match_materials_to_script
+        )
+
+    @property
+    def uses_chronological_materials(self) -> bool:
+        return self.uses_visual_scene_matching or self.uses_legacy_script_matching
 
 
 class SubtitleRequest(BaseModel):

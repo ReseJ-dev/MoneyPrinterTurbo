@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.models.schema import VideoAspect, VideoParams
+from app.models.schema import MaterialMatchingMode, VideoAspect, VideoParams
 
 
 class TestVideoAspect(unittest.TestCase):
@@ -21,6 +21,53 @@ class TestVideoAspect(unittest.TestCase):
 
 
 class TestVideoParams(unittest.TestCase):
+    def test_material_matching_mode_defaults_to_fast_and_serializes(self):
+        params = VideoParams(video_subject="Coffee")
+
+        self.assertEqual(
+            params.resolved_material_matching_mode,
+            MaterialMatchingMode.fast,
+        )
+        self.assertEqual(
+            params.model_dump(mode="json")["material_matching_mode"],
+            "fast",
+        )
+
+    def test_rejects_unknown_material_matching_mode(self):
+        with self.assertRaises(ValidationError):
+            VideoParams(video_subject="Coffee", material_matching_mode="bestest")
+
+    def test_legacy_script_matching_flag_remains_ordered_fast_mode(self):
+        params = VideoParams(
+            video_subject="Coffee",
+            match_materials_to_script=True,
+        )
+
+        self.assertEqual(params.material_matching_mode, MaterialMatchingMode.fast)
+        self.assertTrue(params.uses_legacy_script_matching)
+        self.assertFalse(params.uses_visual_scene_matching)
+
+    def test_legacy_scene_planning_maps_to_better_mode(self):
+        params = VideoParams(
+            video_subject="Coffee",
+            visual_scene_planning=True,
+        )
+
+        self.assertEqual(params.material_matching_mode, MaterialMatchingMode.better)
+        self.assertTrue(params.uses_visual_scene_matching)
+
+    def test_explicit_new_mode_takes_precedence_over_legacy_flags(self):
+        params = VideoParams(
+            video_subject="Coffee",
+            material_matching_mode="strict",
+            match_materials_to_script=True,
+            visual_scene_planning=False,
+        )
+
+        self.assertEqual(params.material_matching_mode, MaterialMatchingMode.strict)
+        self.assertTrue(params.uses_strict_visual_qa)
+        self.assertFalse(params.uses_legacy_script_matching)
+
     def test_visual_scene_planning_is_opt_in(self):
         params = VideoParams(video_subject="Coffee")
 

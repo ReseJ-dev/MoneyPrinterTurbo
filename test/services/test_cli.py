@@ -276,6 +276,48 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(params.custom_audio_file, "voiceover.mp3")
 
+    def test_material_matching_mode_parses_and_serializes(self):
+        args = cli.parse_args(
+            [
+                "--video-subject",
+                "test",
+                "--material-matching-mode",
+                "strict",
+            ]
+        )
+        params = cli.build_video_params(args)
+
+        self.assertEqual(params.material_matching_mode.value, "strict")
+        self.assertEqual(
+            params.model_dump(mode="json")["material_matching_mode"],
+            "strict",
+        )
+
+    def test_legacy_matching_flag_still_maps_to_ordered_fast_mode(self):
+        args = cli.parse_args(
+            ["--video-subject", "test", "--match-materials-to-script"]
+        )
+        params = cli.build_video_params(args)
+
+        self.assertEqual(params.material_matching_mode.value, "fast")
+        self.assertTrue(params.uses_legacy_script_matching)
+
+    def test_new_cli_mode_takes_precedence_over_legacy_flag(self):
+        args = cli.parse_args(
+            [
+                "--video-subject",
+                "test",
+                "--material-matching-mode",
+                "better",
+                "--match-materials-to-script",
+            ]
+        )
+        params = cli.build_video_params(args)
+
+        self.assertEqual(params.material_matching_mode.value, "better")
+        self.assertTrue(params.uses_visual_scene_matching)
+        self.assertFalse(params.uses_legacy_script_matching)
+
     def test_build_video_params_with_subtitle_style_options(self):
         args = cli.parse_args(
             [

@@ -8,6 +8,7 @@ from loguru import logger
 from app.models.schema import MaterialInfo
 from app.models.visual_scene import VisualScene
 from app.services import scene_materials
+from app.services.visual_ranking import VisualRankingUnavailable
 
 
 DEFAULT_THRESHOLD = 0.20
@@ -298,7 +299,7 @@ def qa_scene_candidates(
                 "strict visual QA unavailable for candidate: "
                 f"scene_id={scene.id}, asset_id={_asset_id(item)}, reason={reason}"
             )
-            if not fail_on_mismatch:
+            if isinstance(exc, VisualRankingUnavailable) or not fail_on_mismatch:
                 return VisualQASelection(
                     scene=scene,
                     material=item,
@@ -310,7 +311,11 @@ def qa_scene_candidates(
                         score=None,
                         attempts=attempts,
                         fallback_used=used_fallback_query,
-                        selection_reason="qa_unavailable_fallback",
+                        selection_reason=(
+                            "visual_ai_unavailable_degraded"
+                            if isinstance(exc, VisualRankingUnavailable)
+                            else "qa_unavailable_fallback"
+                        ),
                         rejections=rejections,
                     ),
                 )

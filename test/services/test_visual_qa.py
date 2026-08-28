@@ -207,7 +207,7 @@ class TestVisualQARetry(unittest.TestCase):
         self.assertEqual(selected_paths, ["alternative"])
         self.assertEqual(result.material.source_info["asset_id"], "alternative")
 
-    def test_missing_ml_dependency_accepts_candidate_when_not_fail_strict(self):
+    def test_missing_ml_dependency_degrades_even_when_fail_strict(self):
         unavailable = visual_ranking.VisualRankingUnavailable("missing optional ML")
 
         result = visual_qa.qa_scene_candidates(
@@ -216,11 +216,15 @@ class TestVisualQARetry(unittest.TestCase):
             scorer=SequencedScorer([unavailable]),
             download=lambda _item: "/tmp/first.mp4",
             extract_frames=_extract,
+            fail_on_mismatch=True,
         )
 
         self.assertEqual(result.material.source_info["asset_id"], "first")
         self.assertIsNone(result.report.video_qa_score)
-        self.assertEqual(result.report.selection_reason, "qa_unavailable_fallback")
+        self.assertEqual(
+            result.report.selection_reason,
+            "visual_ai_unavailable_degraded",
+        )
 
     def test_report_serializes_to_plain_json(self):
         result = visual_qa.qa_scene_candidates(

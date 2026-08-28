@@ -36,6 +36,7 @@ from app.models.llm_provider import (
     normalize_provider_override,
 )
 from app.models.schema import (
+    MaterialMatchingMode,
     MaterialInfo,
     VideoAspect,
     VideoConcatMode,
@@ -48,6 +49,7 @@ from app.services import (
     llm,
     loomloom,
     video,
+    visual_ranking,
     volcengine_seedance,
     voice,
     webui_task,
@@ -270,6 +272,20 @@ def _saved_ui_choice(key, options, default):
     return default
 
 
+def _configured_material_matching_mode():
+    valid_modes = {mode.value for mode in MaterialMatchingMode}
+    configured = str(config.app.get("material_matching_mode", "")).strip().lower()
+    if configured in valid_modes:
+        return configured
+    if config.app.get("visual_scene_planning", False):
+        return (
+            MaterialMatchingMode.strict.value
+            if config.app.get("visual_qa_enabled", False)
+            else MaterialMatchingMode.better.value
+        )
+    return MaterialMatchingMode.fast.value
+
+
 def _saved_ui_number(key, default, minimum, maximum, number_type=float):
     """读取并限幅持久化数值，避免非法配置破坏 Streamlit slider。"""
     try:
@@ -480,6 +496,7 @@ def _initialize_session_state():
         "match_materials_to_script": bool(
             config.app.get("match_materials_to_script", False)
         ),
+        "material_matching_mode": _configured_material_matching_mode(),
         "custom_bgm_file_input": _saved_ui_text("custom_bgm_file"),
         "sonilo_bgm_prompt_input": _saved_ui_text(
             "sonilo_bgm_prompt",
@@ -1303,6 +1320,12 @@ def _apply_restored_params(params):
     st.session_state["match_materials_to_script"] = bool(
         params.get("match_materials_to_script", False)
     )
+    material_matching_mode = params.get("material_matching_mode") or "fast"
+    st.session_state["material_matching_mode"] = material_matching_mode
+    _set_stable_widget_value(
+        "material_matching_mode_select",
+        material_matching_mode,
+    )
 
     # 音频设置。TTS server 未写入旧任务，根据历史 voice_name 推断。
     voice_name = params.get("voice_name") or voice.NO_VOICE_NAME
@@ -1981,7 +2004,16 @@ def sync_script_order_concat_mode():
     """在文案顺序匹配开启时固定使用顺序拼接，并在关闭后恢复原选择。"""
     widget_key = localized_widget_key("video_concat_mode_select")
     previous_key = "video_concat_mode_before_script_order_match"
-    match_script_order = bool(st.session_state.get("match_materials_to_script", False))
+    material_matching_mode = st.session_state.get(
+        localized_widget_key("material_matching_mode_select"),
+        st.session_state.get("material_matching_mode", MaterialMatchingMode.fast.value),
+    )
+    match_script_order = bool(
+        st.session_state.get("match_materials_to_script", False)
+    ) or material_matching_mode in {
+        MaterialMatchingMode.better.value,
+        MaterialMatchingMode.strict.value,
+    }
 
     if match_script_order:
         current_mode = st.session_state.get(widget_key, VideoConcatMode.random.value)
@@ -3314,8 +3346,8 @@ def _render_local_script_generation(params):
             terms = llm.generate_terms(
                 params.video_subject,
                 script,
-                amount=8 if params.match_materials_to_script else 5,
-                match_script_order=params.match_materials_to_script,
+                amount=8 if params.uses_legacy_script_matching else 5,
+                match_script_order=params.uses_legacy_script_matching,
                 app_config=app_config_snapshot,
             )
             return script, terms
@@ -3782,8 +3814,8 @@ def _render_script_settings(panel, params):
                             lambda app_config_snapshot: llm.generate_terms(
                                 params.video_subject,
                                 params.video_script,
-                                amount=8 if params.match_materials_to_script else 5,
-                                match_script_order=params.match_materials_to_script,
+                                amount=8 if params.uses_legacy_script_matching else 5,
+                                match_script_order=params.uses_legacy_script_matching,
                                 app_config=app_config_snapshot,
                             ),
                         )
@@ -3854,6 +3886,47 @@ def _render_video_settings(panel, params):
             # 文案顺序匹配会从关键词生成到最终合成全程保持叙事顺序，因此开启时
             # 顺序拼接是唯一符合实际执行逻辑的选项。同步控件值可避免界面仍显示
             # “随机拼接”，同时保留用户原选择，关闭后自动恢复。
+            material_matching_labels = {
+                MaterialMatchingMode.fast.value: tr("Material Matching Fast"),
+                MaterialMatchingMode.better.value: tr(
+                    "Material Matching Better Recommended"
+                ),
+                MaterialMatchingMode.strict.value: tr("Material Matching Strict"),
+            }
+            selected_material_matching_mode = stable_selectbox(
+                tr("Material Matching"),
+                options=[mode.value for mode in MaterialMatchingMode],
+                default_value=st.session_state.get(
+                    "material_matching_mode",
+                    _configured_material_matching_mode(),
+                ),
+                key="material_matching_mode_select",
+                format_func=lambda value: material_matching_labels[value],
+                help=tr("Material Matching Help"),
+                on_change=sync_script_order_concat_mode,
+            )
+            params.material_matching_mode = MaterialMatchingMode(
+                selected_material_matching_mode
+            )
+            st.session_state["material_matching_mode"] = (
+                selected_material_matching_mode
+            )
+            _set_runtime_config(
+                "app",
+                "material_matching_mode",
+                selected_material_matching_mode,
+            )
+            if selected_material_matching_mode == MaterialMatchingMode.better.value:
+                st.caption(tr("Material Matching Better Description"))
+                if not visual_ranking.local_visual_ai_dependencies_available():
+                    st.caption(tr("Material Matching Better Fallback"))
+            elif (
+                selected_material_matching_mode == MaterialMatchingMode.strict.value
+            ):
+                st.caption(tr("Material Matching Strict Description"))
+                if not visual_ranking.local_visual_ai_dependencies_available():
+                    st.warning(tr("Material Matching Strict Degraded"))
+
             sync_script_order_concat_mode()
             selected_concat_mode = stable_selectbox(
                 tr("Video Concat Mode"),
@@ -3867,24 +3940,13 @@ def _render_video_settings(panel, params):
                 format_func=lambda value: dict(
                     (v, label) for label, v in video_concat_modes
                 )[value],
-                disabled=bool(st.session_state.get("match_materials_to_script", False)),
+                disabled=params.uses_chronological_materials,
             )
             params.video_concat_mode = VideoConcatMode(selected_concat_mode)
 
-            params.match_materials_to_script = st.checkbox(
-                tr("Match Materials to Script Order"),
-                help=tr("Match Materials to Script Order Help"),
-                key="match_materials_to_script",
-                on_change=sync_script_order_concat_mode,
-            )
-            _set_runtime_config(
-                "app",
-                "match_materials_to_script",
-                params.match_materials_to_script,
-            )
             # 顺序匹配开启时，sequential 是派生出的强制值，不应覆盖用户在关闭
             # 该功能时选择的拼接偏好；关闭后仍能恢复此前的 random/sequential。
-            if not params.match_materials_to_script:
+            if not params.uses_chronological_materials:
                 _set_runtime_config(
                     "ui", "video_concat_mode", params.video_concat_mode.value
                 )
@@ -6068,6 +6130,12 @@ def _render_application():
     params = VideoParams(video_subject="")
     params.match_materials_to_script = bool(
         st.session_state.get("match_materials_to_script", False)
+    )
+    params.material_matching_mode = MaterialMatchingMode(
+        st.session_state.get(
+            "material_matching_mode",
+            _configured_material_matching_mode(),
+        )
     )
     _render_script_settings(left_panel, params)
 

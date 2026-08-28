@@ -319,8 +319,8 @@ def generate_terms(task_id, params, video_script):
         video_terms = llm.generate_terms(
             video_subject=params.video_subject,
             video_script=video_script,
-            amount=8 if params.match_materials_to_script else 5,
-            match_script_order=params.match_materials_to_script,
+            amount=8 if params.uses_legacy_script_matching else 5,
+            match_script_order=params.uses_legacy_script_matching,
         )
     else:
         if isinstance(video_terms, str):
@@ -342,7 +342,7 @@ def generate_terms(task_id, params, video_script):
 
     # 可选的 TwelveLabs Marengo 语义重排：未启用时返回原顺序，无任何副作用。
     # 顺序匹配模式下关键词顺序本身就是脚本叙事顺序，必须保持原样，故跳过。
-    if not params.match_materials_to_script:
+    if not params.uses_legacy_script_matching:
         video_terms = twelvelabs.rerank_terms_by_subject(
             video_subject=params.video_subject,
             search_terms=video_terms,
@@ -355,7 +355,7 @@ def generate_visual_scene_plan(
     params: VideoParams,
     video_script: str,
 ) -> list[VisualScene]:
-    if not params.visual_scene_planning:
+    if not params.uses_visual_scene_matching:
         return []
     if not material.supports_scene_aware_search(params.video_source):
         logger.warning(
@@ -759,6 +759,7 @@ def get_video_materials(
                     source=params.video_source,
                     video_aspect=params.video_aspect,
                     max_clip_duration=params.video_clip_duration,
+                    strict_visual_qa=params.uses_strict_visual_qa,
                 )
             except visual_qa.StrictVisualQAMismatch as exc:
                 _mark_task_failed(task_id, "materials", str(exc))
@@ -786,18 +787,12 @@ def get_video_materials(
                 video_aspect=params.video_aspect,
                 video_concat_mode=(
                     VideoConcatMode.sequential
-                    if (
-                        params.match_materials_to_script
-                        or params.visual_scene_planning
-                    )
+                    if params.uses_chronological_materials
                     else params.video_concat_mode
                 ),
                 audio_duration=audio_duration * params.video_count,
                 max_clip_duration=params.video_clip_duration,
-                match_script_order=(
-                    params.match_materials_to_script
-                    or params.visual_scene_planning
-                ),
+                match_script_order=params.uses_chronological_materials,
             )
         except volcengine_seedance.VolcEngineSeedanceError as exc:
             # 未确认状态和已生成但下载失败都对应一个可在方舟控制台恢复的远端
@@ -882,7 +877,7 @@ def generate_final_videos(
     )
     # 多视频生成默认会打散素材以增加差异；但“按文案顺序匹配素材”追求的是
     # 时间线稳定性和可解释性，所以开启后所有输出都使用顺序拼接。
-    if params.match_materials_to_script or params.visual_scene_planning:
+    if params.uses_chronological_materials:
         video_concat_mode = VideoConcatMode.sequential
     elif params.video_count == 1:
         video_concat_mode = params.video_concat_mode
