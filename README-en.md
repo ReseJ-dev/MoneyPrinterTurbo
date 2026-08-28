@@ -307,7 +307,7 @@ Notes:
 - `uv.lock` pins the resolved environment, so `uv sync --frozen` is recommended by default.
 - `requirements.txt` is kept only for legacy `pip`-based installation.
 
-#### Optional local visual ranking
+#### Visual Material Matching
 
 Material matching is exposed as three quality levels:
 
@@ -323,6 +323,26 @@ The WebUI labels `better` as recommended without silently changing existing
 users. An explicitly supplied `material_matching_mode` takes precedence. When
 it is omitted, the legacy `visual_scene_planning` and
 `match_materials_to_script` fields retain their prior behavior.
+
+Choose **Material Matching** in the WebUI, set `material_matching_mode` on an
+API `VideoParams` request, or use the CLI:
+
+```shell
+# Fast
+uv run python cli.py --video-subject "Black sand beaches" --material-matching-mode fast
+
+# Better
+uv run python cli.py --video-subject "Black sand beaches" --material-matching-mode better
+
+# Strict
+uv run python cli.py --video-subject "Black sand beaches" --material-matching-mode strict
+```
+
+Better and Strict tasks save a compact `visual_matching_report` in the task's
+`script.json`. It records each narration scene, visual target, searched queries,
+candidate decisions, safe provider source pages, retries/fallbacks, and aggregate
+coverage metrics. The completed-task WebUI shows the same essentials in a
+**Visual Matching Report** expander.
 
 Scene-aware stock retrieval can rank provider thumbnails against each scene's
 visual description with a local OpenCLIP model. This is disabled by default and
@@ -351,7 +371,7 @@ probabilities. If dependencies, thumbnails, or model loading are unavailable,
 MoneyPrinterTurbo keeps the deterministic query/provider ordering. No paid
 semantic service or TwelveLabs key is required.
 
-Strict visual QA is independently opt-in. It downloads at most the configured
+Strict visual QA downloads at most the configured
 number of candidates per scene, samples three evenly spaced interior video
 frames by default, and averages the best two frame similarities. This top-two
 mean tolerates a short action not appearing in every frame without allowing one
@@ -359,8 +379,13 @@ accidental frame to determine the result. The threshold is a relative embedding
 similarity, not a probability; `0.20` is a conservative starting point for the
 default model and may need tuning for a footage collection. Failed candidates
 advance through the scene's fallback queries. If none pass, the best scored clip
-is accepted with a warning unless `visual_qa_fail_on_mismatch = true`. Results
-are written to `visual_matching_report` in the task's `script.json` artifact.
+is accepted with a warning unless `visual_qa_fail_on_mismatch = true`.
+
+Visual similarity can improve relative candidate ordering, but it cannot verify
+facts, guarantee that an action occurs, or compensate for missing provider
+footage. Better adds LLM planning, provider searches, and optional thumbnail
+inference. Strict additionally downloads and decodes retry candidates, so it is
+the slowest mode and uses more bandwidth and local compute.
 
 #### ② Launch the WebUI 🌐
 

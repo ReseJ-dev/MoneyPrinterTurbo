@@ -3,6 +3,7 @@ import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -12,6 +13,9 @@ TASK_HISTORY_HELPERS = {
     "_build_video_download_name",
     "_build_restore_upload_requirements",
     "_get_unmet_restore_upload_requirements",
+    "_format_task_subject",
+    "_safe_visual_report_link",
+    "_visual_matching_report_rows",
 }
 TASK_HISTORY_CONSTANTS = {
     "_FINAL_VIDEO_PATTERN",
@@ -40,7 +44,13 @@ def _load_task_history_helpers():
         elif isinstance(node, ast.FunctionDef) and node.name in TASK_HISTORY_HELPERS:
             selected_nodes.append(node)
 
-    namespace = {"os": os, "re": re, "Mapping": Mapping}
+    namespace = {
+        "os": os,
+        "re": re,
+        "Mapping": Mapping,
+        "urlsplit": urlsplit,
+        "urlunsplit": urlunsplit,
+    }
     module = ast.fix_missing_locations(ast.Module(body=selected_nodes, type_ignores=[]))
     exec(compile(module, str(WEBUI_MAIN), "exec"), namespace)
     return namespace
@@ -54,6 +64,9 @@ build_restore_upload_requirements = TASK_HISTORY_NAMESPACE[
 ]
 get_unmet_restore_upload_requirements = TASK_HISTORY_NAMESPACE[
     "_get_unmet_restore_upload_requirements"
+]
+visual_matching_report_rows = TASK_HISTORY_NAMESPACE[
+    "_visual_matching_report_rows"
 ]
 
 
@@ -164,3 +177,50 @@ def test_restore_requirements_allow_replacing_upload_with_other_voice_modes():
             has_custom_audio=False,
             voice_mode=voice_mode,
         )
+
+
+def test_visual_matching_report_rows_show_selection_and_strip_signed_query():
+    rows = visual_matching_report_rows(
+        {
+            "visual_matching_report": {
+                "mode": "strict",
+                "scenes": [
+                    {
+                        "scene_id": 2,
+                        "narration": "An owl turns its head.",
+                        "visual_description": "owl turning its head",
+                        "selected": {
+                            "provider": "pexels",
+                            "asset_id": "123",
+                            "query": "owl turning head",
+                            "source_page": "https://pexels.com/video/123?token=secret",
+                            "thumbnail_score": 0.81,
+                            "video_qa_score": 0.76,
+                        },
+                        "retries": 1,
+                        "fallback_used": True,
+                    }
+                ],
+            }
+        }
+    )
+
+    assert rows == [
+        {
+            "scene_id": 2,
+            "narration": "An owl turns its head.",
+            "visual_description": "owl turning its head",
+            "query": "owl turning head",
+            "provider": "pexels",
+            "asset_id": "123",
+            "score": 0.76,
+            "retries": 1,
+            "fallback_used": True,
+            "source_page": "https://pexels.com/video/123",
+        }
+    ]
+
+
+def test_visual_matching_report_rows_ignore_old_or_missing_report_shapes():
+    assert visual_matching_report_rows({}) == []
+    assert visual_matching_report_rows({"visual_matching_report": []}) == []

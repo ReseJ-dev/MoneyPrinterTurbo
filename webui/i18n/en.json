@@ -422,6 +422,10 @@
     "Upload-Post Profile Username": "Upload-Post Profile Username",
     "Upload-Post Profile Username Help": "Enter the Username shown on [Manage Users]({manage_users_url}), not your Upload-Post account email. This publishing user must be connected to the selected platforms.",
     "Upload-Post Setup Guide": "Before enabling auto-publish:\n1. Create an API key on [API Keys]({api_keys_url}).\n2. Create or select a publishing user on [Manage Users]({manage_users_url}), then connect the target platforms.\n\nEnter that publishing user's **Username** below, not your Upload-Post account email.",
-    "YouTube Privacy Status": "YouTube Privacy Status"
+    "YouTube Privacy Status": "YouTube Privacy Status",
+    "Visual Matching Report": "Visual Matching Report",
+    "Visual Matching Metrics": "Coverage: {coverage}% · average semantic score: {score} · retries: {retries} · fallback scenes: {fallback}",
+    "Visual Matching Scene Summary": "**Scene {scene_id}** — {narration}  \nVisual target: `{visual}`  \nSelected query: `{query}` · material: `{provider}:{asset_id}` · score: `{score}` · retries: `{retries}` · fallback: `{fallback}`",
+    "Open Material Source Page": "Open Material Source Page"
   }
 }

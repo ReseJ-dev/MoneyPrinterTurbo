@@ -19,6 +19,7 @@ from app.services import (
     material_cache,
     scene_materials,
     task_artifacts,
+    visual_matching_diagnostics,
     visual_qa,
     visual_ranking,
     volcengine_seedance,
@@ -168,22 +169,53 @@ def _persist_material_sources(
 
 def _persist_visual_matching_report(
     task_id: str,
-    reports: list[visual_qa.VisualQAReport],
+    report: (
+        visual_matching_diagnostics.VisualMatchingReport
+        | list[visual_qa.VisualQAReport]
+    ),
 ) -> None:
     try:
+        if isinstance(report, list):
+            payload: Any = [item.to_dict() for item in report]
+            mode = "legacy-strict"
+            scene_count = len(report)
+        else:
+            payload = report.to_dict()
+            mode = report.mode
+            scene_count = len(report.scenes)
         saved = task_artifacts.patch_script_data(
             task_id,
-            visual_matching_report=[report.to_dict() for report in reports],
+            visual_matching_report=payload,
         )
         if saved:
             logger.info(
                 "saved visual matching report: "
-                f"task_id={task_id}, scenes={len(reports)}"
+                f"task_id={task_id}, mode={mode}, scenes={scene_count}"
             )
     except Exception as exc:
         logger.warning(
             "failed to persist visual matching report: "
             f"task_id={task_id}, error={type(exc).__name__}, detail={exc}"
+        )
+
+
+def _log_visual_matching_report(
+    report: visual_matching_diagnostics.VisualMatchingReport,
+) -> None:
+    total = len(report.scenes)
+    for index, scene in enumerate(report.scenes, start=1):
+        selected = scene.selected
+        selected_ref = (
+            f"{selected.provider}:{selected.asset_id}" if selected else "none"
+        )
+        thumbnail_score = selected.thumbnail_score if selected else None
+        qa_score = selected.video_qa_score if selected else None
+        logger.info(
+            f"[scene {index}/{total}] visual={scene.visual_description!r} "
+            f"queries={list(scene.queries)!r} candidates={scene.candidates_found} "
+            f"selected={selected_ref} thumbnail_score={thumbnail_score} "
+            f"qa_score={qa_score} retry={scene.retries} "
+            f"fallback={scene.fallback_used}"
         )
 
 
@@ -1247,9 +1279,11 @@ def search_video_candidates_by_scene(
 
 def select_video_candidates_by_scene(
     pools: List[scene_materials.SceneCandidatePool],
+    *,
+    rank_candidates: bool = True,
 ) -> list[scene_materials.SceneMaterialSelection]:
     """Optionally rank pools semantically, then select one asset per scene."""
-    ranked_pools = rank_video_candidate_pools(pools)
+    ranked_pools = rank_video_candidate_pools(pools) if rank_candidates else pools
     return scene_materials.select_candidates_by_scene(ranked_pools)
 
 
@@ -1270,11 +1304,15 @@ def rank_video_candidate_pools(
 def download_selected_scene_videos(
     task_id: str,
     selections: List[scene_materials.SceneMaterialSelection],
+    *,
+    candidate_pools: List[scene_materials.SceneCandidatePool] | None = None,
+    material_matching_mode: str = "better",
 ) -> List[str]:
     """Download only the already-selected scene assets in chronological order."""
     material_directory = _resolve_material_directory(task_id)
     video_paths: List[str] = []
     material_sources: list[dict[str, Any]] = []
+    downloaded_by_scene: dict[int, MaterialInfo] = {}
     for selection in selections:
         item = selection.material
         try:
@@ -1292,6 +1330,7 @@ def download_selected_scene_videos(
             if not saved_video_path:
                 continue
             video_paths.append(saved_video_path)
+            downloaded_by_scene[selection.scene.id] = item
             try:
                 material_sources.append(_material_source_record(item, saved_video_path))
             except Exception as source_error:
@@ -1309,8 +1348,41 @@ def download_selected_scene_videos(
             )
 
     _persist_material_sources(task_id, material_sources)
+    if candidate_pools is not None:
+        report = visual_matching_diagnostics.build_visual_matching_report(
+            material_matching_mode,
+            candidate_pools,
+            downloaded_by_scene,
+            legacy_fallback_used=not downloaded_by_scene,
+        )
+        _persist_visual_matching_report(task_id, report)
+        _log_visual_matching_report(report)
     logger.success(f"downloaded {len(video_paths)} scene-aware videos")
     return video_paths
+
+
+def persist_empty_visual_matching_report(
+    task_id: str,
+    visual_scenes: List[VisualScene],
+    material_matching_mode: str,
+) -> None:
+    """Persist diagnostics when scene retrieval fails before pools are returned."""
+    pools = [
+        scene_materials.SceneCandidatePool(
+            scene=scene,
+            candidates=(),
+            attempted_queries=tuple(scene.search_queries),
+        )
+        for scene in visual_scenes
+    ]
+    report = visual_matching_diagnostics.build_visual_matching_report(
+        material_matching_mode,
+        pools,
+        {},
+        legacy_fallback_used=True,
+    )
+    _persist_visual_matching_report(task_id, report)
+    _log_visual_matching_report(report)
 
 
 def download_videos_for_scenes(
@@ -1321,6 +1393,7 @@ def download_videos_for_scenes(
     video_aspect: VideoAspect = VideoAspect.portrait,
     max_clip_duration: int = 5,
     strict_visual_qa: bool = False,
+    material_matching_mode: str | None = None,
 ) -> List[str]:
     """Search, select, then download one stock candidate for each covered scene."""
     pools = search_video_candidates_by_scene(
@@ -1330,19 +1403,42 @@ def download_videos_for_scenes(
         max_clip_duration=max_clip_duration,
     )
     qa_config = visual_qa.VisualQAConfig.from_mapping(config.app)
-    if strict_visual_qa:
+    if material_matching_mode == "better":
+        qa_config = replace(qa_config, enabled=False)
+    if strict_visual_qa or material_matching_mode == "strict":
         qa_config = replace(qa_config, enabled=True)
+    report_mode = material_matching_mode or (
+        "strict" if qa_config.enabled else "better"
+    )
     if qa_config.enabled:
         return download_scene_videos_with_visual_qa(
             task_id,
             pools,
             qa_config,
             force_visual_ranking=strict_visual_qa,
+            material_matching_mode=report_mode,
         )
-    selections = select_video_candidates_by_scene(pools)
+    ranked_pools = rank_video_candidate_pools(pools)
+    selections = select_video_candidates_by_scene(
+        ranked_pools,
+        rank_candidates=False,
+    )
     if not selections:
+        report = visual_matching_diagnostics.build_visual_matching_report(
+            report_mode,
+            ranked_pools,
+            {},
+            legacy_fallback_used=True,
+        )
+        _persist_visual_matching_report(task_id, report)
+        _log_visual_matching_report(report)
         return []
-    return download_selected_scene_videos(task_id, selections)
+    return download_selected_scene_videos(
+        task_id,
+        selections,
+        candidate_pools=ranked_pools,
+        material_matching_mode=report_mode,
+    )
 
 
 def download_scene_videos_with_visual_qa(
@@ -1351,6 +1447,7 @@ def download_scene_videos_with_visual_qa(
     qa_config: visual_qa.VisualQAConfig,
     *,
     force_visual_ranking: bool = False,
+    material_matching_mode: str = "strict",
 ) -> List[str]:
     """Download and validate bounded ranked candidates for each visual scene."""
     ranked_pools = rank_video_candidate_pools(
@@ -1366,6 +1463,7 @@ def download_scene_videos_with_visual_qa(
     video_paths: List[str] = []
     material_sources: list[dict[str, Any]] = []
     reports: list[visual_qa.VisualQAReport] = []
+    selected_by_scene: dict[int, MaterialInfo] = {}
     recent_identities: list[str] = []
     failed_scene_ids: list[int] = []
 
@@ -1390,6 +1488,7 @@ def download_scene_videos_with_visual_qa(
             continue
 
         video_paths.append(selection.local_path)
+        selected_by_scene[pool.scene.id] = selection.material
         material_sources.append(
             _material_source_record(selection.material, selection.local_path)
         )
@@ -1400,7 +1499,15 @@ def download_scene_videos_with_visual_qa(
             del recent_identities[: -qa_config.recent_asset_window]
 
     _persist_material_sources(task_id, material_sources)
-    _persist_visual_matching_report(task_id, reports)
+    report = visual_matching_diagnostics.build_visual_matching_report(
+        material_matching_mode,
+        ranked_pools,
+        selected_by_scene,
+        {item.scene_id: item for item in reports},
+        legacy_fallback_used=not selected_by_scene and not qa_config.fail_on_mismatch,
+    )
+    _persist_visual_matching_report(task_id, report)
+    _log_visual_matching_report(report)
     if qa_config.fail_on_mismatch and failed_scene_ids:
         raise visual_qa.StrictVisualQAMismatch(
             "strict visual QA rejected all attempted candidates for scenes: "

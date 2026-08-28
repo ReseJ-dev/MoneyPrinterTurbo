@@ -244,6 +244,35 @@ class TestVisualQARetry(unittest.TestCase):
 
 
 class TestVisualQAIntegration(unittest.TestCase):
+    def test_better_mode_disables_legacy_visual_qa_config(self):
+        pool = scene_materials.SceneCandidatePool(
+            scene=_scene(),
+            candidates=(_candidate("first"),),
+            attempted_queries=tuple(_scene().search_queries),
+        )
+        with (
+            patch.object(
+                material,
+                "search_video_candidates_by_scene",
+                return_value=[pool],
+            ),
+            patch.object(material.config, "app", {"visual_qa_enabled": True}),
+            patch.object(
+                material,
+                "download_selected_scene_videos",
+                return_value=["first.mp4"],
+            ),
+            patch.object(material.visual_qa, "qa_scene_candidates") as qa,
+        ):
+            result = material.download_videos_for_scenes(
+                "task",
+                [_scene()],
+                material_matching_mode="better",
+            )
+
+        self.assertEqual(result, ["first.mp4"])
+        qa.assert_not_called()
+
     def test_disabled_qa_uses_existing_selection_and_download_path(self):
         pool = scene_materials.SceneCandidatePool(
             scene=_scene(),

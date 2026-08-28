@@ -13,6 +13,7 @@ import webbrowser
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import requests
@@ -606,6 +607,68 @@ def _safe_load_task_script(task_path):
     except Exception as e:
         logger.warning(f"failed to read task script data: {script_file}, {e}")
         return {}
+
+
+def _safe_visual_report_link(value):
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _visual_matching_report_rows(script_data):
+    """Return stable display rows while tolerating old task artifact shapes."""
+    if not isinstance(script_data, Mapping):
+        return []
+    report = script_data.get("visual_matching_report")
+    if not isinstance(report, Mapping) or not isinstance(report.get("scenes"), list):
+        return []
+
+    rows = []
+    for scene in report["scenes"]:
+        if not isinstance(scene, Mapping):
+            continue
+        selected = scene.get("selected")
+        selected = selected if isinstance(selected, Mapping) else {}
+        narration = str(scene.get("narration") or "").replace("\n", " ").strip()
+        score = selected.get("video_qa_score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            score = selected.get("thumbnail_score")
+        try:
+            retries = max(int(scene.get("retries") or 0), 0)
+        except (TypeError, ValueError):
+            retries = 0
+        rows.append(
+            {
+                "scene_id": scene.get("scene_id", ""),
+                "narration": _format_task_subject(narration, max_length=100),
+                "visual_description": str(
+                    scene.get("visual_description") or ""
+                ).strip(),
+                "query": str(selected.get("query") or "").strip(),
+                "provider": str(selected.get("provider") or "").strip(),
+                "asset_id": str(selected.get("asset_id") or "").strip(),
+                "score": round(float(score), 3)
+                if isinstance(score, (int, float)) and not isinstance(score, bool)
+                else None,
+                "retries": retries,
+                "fallback_used": bool(scene.get("fallback_used", False)),
+                "source_page": _safe_visual_report_link(
+                    selected.get("source_page")
+                ),
+            }
+        )
+    return rows
 
 
 def _find_final_task_video(task_path: str) -> str:
@@ -1717,6 +1780,47 @@ def _render_generation_logs(task_id):
     st.code("\n".join(log_records))
 
 
+def _render_visual_matching_report(task_id):
+    script_data = _safe_load_task_script(utils.task_dir(task_id))
+    rows = _visual_matching_report_rows(script_data)
+    if not rows:
+        return
+
+    report = script_data.get("visual_matching_report", {})
+    metrics = report.get("metrics", {}) if isinstance(report, Mapping) else {}
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    with st.expander(tr("Visual Matching Report"), expanded=False):
+        st.caption(
+            tr("Visual Matching Metrics").format(
+                coverage=metrics.get("scene_coverage_percentage", 0),
+                score=metrics.get("average_semantic_score", "-"),
+                retries=metrics.get("retries", 0),
+                fallback=metrics.get("fallback_scenes", 0),
+            )
+        )
+        for row in rows:
+            score = row["score"] if row["score"] is not None else "-"
+            st.markdown(
+                tr("Visual Matching Scene Summary").format(
+                    scene_id=row["scene_id"],
+                    narration=row["narration"] or "-",
+                    visual=row["visual_description"] or "-",
+                    query=row["query"] or "-",
+                    provider=row["provider"] or "-",
+                    asset_id=row["asset_id"] or "-",
+                    score=score,
+                    retries=row["retries"],
+                    fallback=row["fallback_used"],
+                )
+            )
+            if row["source_page"]:
+                st.link_button(
+                    tr("Open Material Source Page"),
+                    row["source_page"],
+                    icon=":material/open_in_new:",
+                )
+
+
 def _render_generation_task_snapshot(task_id, task):
     """根据状态存储中的快照渲染进度、失败原因或最终成片。"""
     if not task:
@@ -1805,6 +1909,9 @@ def _render_generation_task_snapshot(task_id, task):
             f"video_files={video_files}, error={exc}"
         )
 
+    report_renderer = globals().get("_render_visual_matching_report")
+    if report_renderer:
+        report_renderer(task_id)
     _render_generation_logs(task_id)
     if st.session_state.get("handled_generation_task_id") != task_id:
         # Fragment 可能重复渲染同一个完成任务。无论是否开启自动打开目录，

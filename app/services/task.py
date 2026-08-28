@@ -760,11 +760,19 @@ def get_video_materials(
                     video_aspect=params.video_aspect,
                     max_clip_duration=params.video_clip_duration,
                     strict_visual_qa=params.uses_strict_visual_qa,
+                    material_matching_mode=(
+                        params.resolved_material_matching_mode.value
+                    ),
                 )
             except visual_qa.StrictVisualQAMismatch as exc:
                 _mark_task_failed(task_id, "materials", str(exc))
                 return None
             except Exception as exc:
+                material.persist_empty_visual_matching_report(
+                    task_id,
+                    visual_scene_plan,
+                    params.resolved_material_matching_mode.value,
+                )
                 logger.warning(
                     "scene-aware material retrieval failed; fall back to legacy "
                     f"ordered terms: error={type(exc).__name__}, detail={exc}"
