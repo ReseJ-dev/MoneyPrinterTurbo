@@ -344,6 +344,21 @@ candidate decisions, safe provider source pages, retries/fallbacks, and aggregat
 coverage metrics. The completed-task WebUI shows the same essentials in a
 **Visual Matching Report** expander.
 
+Material matching is exposed as three quality levels:
+
+- `fast`: legacy flat search terms with the lowest compute usage.
+- `better`: chronological visual scenes with three stock queries per scene;
+  local thumbnail ranking is used when installed and enabled.
+- `strict`: forces local thumbnail ranking and downloaded-video frame QA, with
+  bounded retries. If optional visual AI is unavailable, it warns and degrades
+  safely instead of failing the task.
+
+The application and API default remains `fast` for backwards compatibility.
+The WebUI labels `better` as recommended without silently changing existing
+users. An explicitly supplied `material_matching_mode` takes precedence. When
+it is omitted, the legacy `visual_scene_planning` and
+`match_materials_to_script` fields retain their prior behavior.
+
 Scene-aware stock retrieval can rank provider thumbnails against each scene's
 visual description with a local OpenCLIP model. This is disabled by default and
 is not part of the normal installation.
